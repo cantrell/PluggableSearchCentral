@@ -1,0 +1,163 @@
+Application
+{
+	color: #ffffff;
+	text-roll-over-color: #ffffff;
+	theme-color: #444444;
+	font-size: 13;
+}
+
+InstallationConfirmation
+{
+	color: #ffffff;
+	background-color: #292929;
+	text-roll-over-color: #ffffff;
+	theme-color: #444444;
+	font-size: 13;
+}
+
+.titleBar
+{
+	background-color: #770000;
+	border-style: solid;
+	border-thickness: 1;
+	corner-radius: 5;
+}
+
+.mainContent
+{
+	background-color: #595959;
+	border-style: solid;
+	border-thickness: 1;
+	corner-radius: 5;
+}
+
+.appTitleFirst, .appTitleSecond
+{
+	font-family: "Helvetica";
+	font-weight: bold;
+	font-size: 20;
+	color: #ffffff;
+}
+
+.appTitleSecond
+{
+	color: #ffffff;
+}
+
+ProgressBar
+{
+	bar-color: #770000;
+}
+
+.customHeaderStyle
+{
+	color: #ffffff;
+	font-weight: bold;
+}
+
+Button
+{
+	fill-colors: #707070, #4c4c4c;
+	highlight-alphas: 0, 0;
+	fill-alphas: 1, 1;
+	border-color: #232323;
+	font-weight: normal;
+}
+
+TextArea
+{
+	background-color: #292929;
+}
+
+Alert
+{
+	color : #ffffff;
+	border-thickness: 1;
+	drop-shadow-enabled: false;
+	background-color: #333333;
+	corner-radius :6;
+	border-style :solid;
+	header-colors : #222222, #222222;
+	footer-colors : #222222, #222222;
+	border-color : #000000;
+	modalTransparencyColor: #333333;
+	buttonStyleName: alertButtons;
+}
+
+DataGrid
+{
+	header-colors: #868686, #868686;
+	border-color: #636363;
+	alternating-item-colors: #ffffff, #eeeeee;
+	color: #000000;
+	header-style-name: customHeaderStyle;
+}
+
+.customHeaderStyle
+{
+	color: #ffffff;
+	font-weight: bold;
+}
+
+.alertButtons
+{
+	color: #ffffff;
+}
+
+ComboBox
+{
+	dropdownStyleName: dropdownStyle;
+	rollOverColor: #595959;
+	selectionColor: #292929;
+	textSelectedColor: #ffffff;
+	textRolloverColor: #ffffff;
+}
+
+.dropdownStyle
+{
+	background-color: #292929;
+}
+
+.searchInput
+{
+	background-color: #868686;
+	border-color: #333333;
+}
+
+.appCloseButton
+{
+	up-skin: Embed("/assets/close_up.png");
+	over-skin: Embed("/assets/close_over.png");
+	down-skin: Embed("/assets/close_pressed.png");
+}
+
+.appMinimizeButton
+{
+	up-skin: Embed("/assets/minimize_up.png");
+	over-skin: Embed("/assets/minimize_over.png");
+	down-skin: Embed("/assets/minimize_pressed.png");
+}
+
+.appRestoreButton
+{
+	up-skin: Embed("/assets/restore_up.png");
+	over-skin: Embed("/assets/restore_over.png");
+	down-skin: Embed("/assets/restore_over.png");
+}
+
+.appGripper
+{
+	skin: Embed("/assets/gripper.png");
+}
+
+.drawer
+{
+	color: #000000;
+}
+
+ToolTip
+{
+	background-color: #353535;
+	border-color: #444444;
+	color: #DDDDDD;	
+}

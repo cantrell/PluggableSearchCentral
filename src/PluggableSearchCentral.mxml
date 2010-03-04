@@ -1,0 +1,583 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:WindowedApplication xmlns:mx="http://www.adobe.com/2006/mxml"
+						xmlns:local="*"
+						layout="absolute" 
+						width="820" height="600"
+						applicationComplete="onCreationComplete();"
+						showStatusBar="false" showFlexChrome="false">
+	<mx:Script>
+		<![CDATA[
+			import com.adobe.searchcentral.PluginData;
+			import com.adobe.searchcentral.URIDereferencer;
+			import com.hurlant.crypto.hash.IHash;
+			import com.hurlant.crypto.hash.SHA1;
+			import com.hurlant.crypto.hash.SHA256;
+			import com.hurlant.util.Base64;
+			
+			import deng.fzip.FZip;
+			import deng.fzip.FZipErrorEvent;
+			import deng.fzip.FZipEvent;
+			import deng.fzip.FZipFile;
+			
+			import flash.events.ErrorEvent;
+			import flash.events.Event;
+			import flash.events.IOErrorEvent;
+			import flash.net.FileFilter;
+			import flash.net.URLLoader;
+			import flash.net.URLLoaderDataFormat;
+			import flash.net.URLRequest;
+			import flash.security.ReferencesValidationSetting;
+			import flash.security.RevocationCheckSettings;
+			import flash.security.XMLSignatureValidator;
+			import flash.system.LoaderContext;
+			import flash.utils.ByteArray;
+			
+			import mx.collections.ArrayCollection;
+			import mx.controls.Alert;
+			import mx.events.CloseEvent;
+			import mx.managers.SystemManager;
+			import mx.utils.UIDUtil;
+			
+			// The supported hash algorithms
+			private const SHA256_ALGORITHM:String = "http://www.w3.org/2001/04/xmlenc#sha256";
+			private const SHA1_ALGORITHM:String   = "http://www.w3.org/2000/09/xmldsig#sha1";
+
+			// The namespace used in the signature XML file
+			private const sigNS:Namespace = new Namespace("http://www.w3.org/2000/09/xmldsig#");
+			private const airNS:Namespace = new Namespace("http://ns.adobe.com/air/application/1.5");
+			
+			// A data provider to hold plug data
+			[Bindable] private var pluginDP:ArrayCollection;
+			
+			private var tmpDir:File; // The directory that plugins are unpacked into
+			private var pluginHome:File; // The directory where plugins live
+			private var browseFile:File; // File for browsing for local plugins
+			
+			private function onCreationComplete():void
+			{
+				this.nativeWindow.addEventListener(Event.CLOSING, onClosing);
+				
+				this.searchTerm.setFocus();
+
+				// Center the window
+				var initialBounds:Rectangle = new Rectangle((Screen.mainScreen.bounds.width / 2 - (this.width/2)), (Screen.mainScreen.bounds.height / 2 - (this.height/2)), this.width, this.height);
+				this.nativeWindow.bounds = initialBounds;				
+				this.nativeWindow.visible = true;
+				
+				// Set up the loader context for the SWFLoader that loads plugins
+				var pluginLoaderContext:LoaderContext = new LoaderContext();
+				pluginLoaderContext.allowLoadBytesCodeExecution = true;
+				this.pluginLoader.loaderContext = pluginLoaderContext;
+
+				// Get a reference to the plugin directory. If it doesn't exist, create it.
+				this.pluginHome = File.applicationStorageDirectory.resolvePath("plugins");
+				if (!this.pluginHome.exists) this.pluginHome.createDirectory();
+				
+				this.parsePlugins();
+			}
+			
+			private function parsePlugins():void
+			{
+				this.setStatus("Parsing plugins");
+				this.pluginDP = new ArrayCollection();
+				var pluginDirs:Array = this.pluginHome.getDirectoryListing();				
+				for each (var pluginDir:File in pluginDirs)
+				{
+					var pluginData:PluginData = this.getPluginDataFromDir(pluginDir);
+					if (pluginData == null)
+					{
+						this.showError("Load Error", "One of your plugins is corrupt.");
+						continue;
+					}
+					this.pluginDP.addItem(pluginData);
+				}
+				this.setStatus("Done parsing plugins");
+				this.loadFirstPlugin();
+			}
+			
+			private function getPluginDataFromDir(pluginDir:File):PluginData
+			{
+				var pluginXMLFile:File = pluginDir.resolvePath("plugin.xml");
+				if (!pluginXMLFile.exists) return null;
+				try
+				{
+					var xmlBytes:ByteArray = this.getFileBytes(pluginXMLFile);
+					var pluginXML:XML = new XML(xmlBytes);
+					
+					var pluginData:PluginData = new PluginData();
+					
+					var name:String = pluginXML.airNS::name;
+					var id:String = pluginXML.airNS::id;
+					var description:String = pluginXML.airNS::description;
+					var version:String = pluginXML.airNS::version;
+					
+					if (name.length == 0 || id.length == 0 || description.length == 0 || version.length == 0) return null;
+					
+					pluginData.name = name;
+					pluginData.id = id;
+					pluginData.pluginPath = pluginDir.nativePath;
+					pluginData.description = description;
+					pluginData.version = Number(version);
+					
+					var pluginFile:File = pluginDir.resolvePath(pluginXML.airNS::initialWindow.airNS::content);
+					if (!pluginFile.exists) return null;
+					pluginData.contentPath = pluginFile.nativePath;
+				}
+				catch (e:Error)
+				{
+					return null; // Plugin is currupt.
+				}
+				return pluginData;
+			}
+			
+			private function loadFirstPlugin():void
+			{
+				if (this.pluginDP.length == 0)
+				{
+					if (this.pluginLoader.content != null) this.pluginLoader.unloadAndStop();
+					this.setStatus("No plugins found. Click \"Add Plugin\" to get started.");
+					return;
+				}
+				this.pluginSelector.selectedItem = this.pluginDP.getItemAt(0);
+				var pluginData:PluginData = this.pluginSelector.selectedItem as PluginData;
+				this.loadPlugin(pluginData);
+			}
+			
+			private function loadPlugin(pluginData:PluginData):void
+			{
+				this.setStatus("Loading " + pluginData.name);
+				if (this.pluginLoader.content != null) this.pluginLoader.unloadAndStop();
+				var contentFile:File = new File(pluginData.contentPath);
+				if (!contentFile.exists)
+				{
+					this.showError("Load Error", "Unable to load plugin. The content SWF is missing. Delete this plugin, and try reinstalling it.", "Load Error");
+					return;
+				}
+				var contentBytes:ByteArray = this.getFileBytes(contentFile);
+				this.pluginLoader.source = contentBytes;
+			}
+			
+			private function testSignatureValidation():void
+			{
+				// Get the signature file and start the validation process
+				var sigFile:File = this.tmpDir.resolvePath("META-INF/signatures.xml");
+				if (!sigFile.exists)
+				{
+					this.showError("Corrupt Plugin", "This plugin is missing the signatures.xml file, so it can't be installed.", "Plugin corrupt", true);
+					return;
+				}
+				
+				try
+				{
+					var xmlBytes:ByteArray = this.getFileBytes(sigFile);
+					var sigXML:XML = new XML(xmlBytes);
+					
+					// First, make sure the files in the plugin weren't tampered with
+					var packageContents:XMLList = sigXML..sigNS::Manifest.(@Id=="PackageContents");
+					for each (var reference:XML in packageContents.sigNS::Reference)
+					{
+						var resourceFile:File = this.tmpDir.resolvePath(reference.@URI);
+						this.setStatus("Verifying " + resourceFile.name);
+						var resourceBytes:ByteArray = this.getFileBytes(resourceFile);
+						var algorithm:String = reference.sigNS::DigestMethod.@Algorithm;
+						var claimedDigest:String = reference.sigNS::DigestValue;
+						var hashedBytes:ByteArray;
+						var hasher:IHash;
+						
+						// Only supports SHA1 and SHA256 for now
+						switch (algorithm)
+						{
+							case SHA256_ALGORITHM:
+								hasher = new SHA256();
+								break;
+							case SHA1_ALGORITHM:
+								hasher = new SHA1();
+								break;
+						}
+						
+						hashedBytes = hasher.hash(resourceBytes);
+						var actualDigest:String = Base64.encodeByteArray(hashedBytes);
+
+						// This is what we're looking for. If the digests don't match, the file was tampered with.
+						if (actualDigest != claimedDigest)
+						{
+							this.showError("Digest Comparison Failure", "This plugin appears to have been tampered with and cannot be installed.", "Plugin could not be saved", true);
+							return;
+						}
+					}
+
+					this.setStatus("Beginning signature validation");
+	
+					// Now, validate the signature
+					var xmlSigVal:XMLSignatureValidator = new XMLSignatureValidator();
+					var def:URIDereferencer = new URIDereferencer(sigXML);
+					xmlSigVal.uriDereferencer = def;
+					
+					xmlSigVal.referencesValidationSetting = ReferencesValidationSetting.VALID_OR_UNKNOWN_IDENTITY; 
+					xmlSigVal.revocationCheckSetting = RevocationCheckSettings.BEST_EFFORT;
+					xmlSigVal.useSystemTrustStore = true;
+					
+					xmlSigVal.addEventListener(Event.COMPLETE, onValidationComplete);
+					xmlSigVal.addEventListener(ErrorEvent.ERROR, onValidationError);
+	
+					xmlSigVal.verify(sigXML.sigNS::Signature[0]);
+				}
+				catch (e:Error)
+				{
+					this.showError("Verification Error", "Unable to verify plugin signature: " + e.message, "Plugin corrupt", true);
+				}
+			}
+			
+			private function onValidationComplete(e:Event):void
+			{
+				var xmlSigVal:XMLSignatureValidator = e.target as XMLSignatureValidator;
+				xmlSigVal.removeEventListener(Event.COMPLETE, onValidationComplete);
+				xmlSigVal.removeEventListener(ErrorEvent.ERROR, onValidationError);
+				this.setStatus("Signature validation complete");
+				try
+				{
+					var pluginXMLFile:File = this.tmpDir.resolvePath("plugin.xml");
+					if (!pluginXMLFile.exists)
+					{
+						this.showError("Corrupt Plugin", "The plugin.xml file is missing from this plugin.", "Corrupt plugin", true);
+						return;
+					}
+					var pluginXMLBytes:ByteArray = this.getFileBytes(pluginXMLFile);
+					var pluginXML:XML = new XML(pluginXMLBytes);
+					var confirm:InstallationConfirmation = new InstallationConfirmation();
+					confirm.addEventListener(CloseEvent.CLOSE, onConfirmationClose);
+					confirm.setData(pluginXML.airNS::name, pluginXML.airNS::description, xmlSigVal.signerCN, (xmlSigVal.validityStatus == "valid"));
+					confirm.open();
+				}
+				catch (e:Error)
+				{
+					this.showError("Validation Error", "Unable to validate this plugin: " + e.message, "Plugin corrupt", true);
+				}
+			}
+			
+			private function onConfirmationClose(e:Event):void
+			{
+				if (e is CloseEvent)
+				{
+					var confirm:InstallationConfirmation = e.target as InstallationConfirmation;
+					confirm.removeEventListener(CloseEvent.CLOSE, onConfirmationClose);
+					if (CloseEvent(e).detail == Alert.YES)
+					{
+						try
+						{
+							this.setStatus("Installing plugin");
+							var destination:File = this.pluginHome.resolvePath(this.tmpDir.name);
+							this.tmpDir.moveTo(destination, true);
+							var newPluginDir:File = this.pluginHome.resolvePath(this.tmpDir.name);
+							var pluginData:PluginData = this.getPluginDataFromDir(newPluginDir);
+							this.pluginDP.addItemAt(pluginData, 0);
+							this.loadFirstPlugin();
+						}
+						catch(e:Error)
+						{
+							this.showError("Installation Failed", "The installation of this plugin failed: " + e.message, "Installation failed", true);
+							return;
+						}
+					}
+					else
+					{
+						this.setStatus("Plugin installation aborted");
+						this.searchTerm.setFocus();
+					}
+				}
+				this.cleanUpTmpDir();
+			}
+			
+			private function onValidationError(e:ErrorEvent):void
+			{
+				var xmlSigVal:XMLSignatureValidator = e.target as XMLSignatureValidator;
+				xmlSigVal.removeEventListener(Event.COMPLETE, onValidationComplete);
+				xmlSigVal.removeEventListener(ErrorEvent.ERROR, onValidationError);
+				this.showError("Signature Validation Failed", "This plugin's signature could not be validated: " + e.text, "Signature validation failed", true);
+			}
+						
+			private function onSubmit(e:Event = null):void
+			{
+				if (this.searchTerm.text.length == 0 || this.pluginLoader.content == null) return;
+				try
+				{
+					SystemManager(this.pluginLoader.content).application["search"](this.searchTerm.text);
+				}
+				catch(e:Error)
+				{
+					this.showError("Unexpected Plugin Format", "This plugin does not appear to be a Flex application: " + e.message, "Plugin failure");
+				}
+			}
+
+			private function onDownloadPlugin():void
+			{
+				this.setStatus("Downloading plugin", true);
+				this.loadPluginDrawer.close();
+				var url:String = this.urlInput.text;
+				if (url.search(/^(http(s?)):\/\/.+$/) == -1) // Valid URL?
+				{
+					this.showError("Invalid URL", "Please enter a valid URL", "Download aborted");
+					return;
+				}
+				var req:URLRequest = new URLRequest(url);
+				this.urlInput.text = "";
+				var loader:URLLoader = new URLLoader();
+				loader.dataFormat = URLLoaderDataFormat.BINARY;
+				loader.addEventListener(Event.COMPLETE, onRemotePluginLoaded);
+				loader.addEventListener(IOErrorEvent.IO_ERROR, onRemotePluginIOError);
+				loader.load(req);
+			}
+			
+			private function onRemotePluginIOError(e:IOErrorEvent):void
+			{
+				this.setStatus("Download error");
+				var loader:URLLoader = e.target as URLLoader;
+				loader.removeEventListener(Event.COMPLETE, onRemotePluginLoaded);
+				loader.removeEventListener(IOErrorEvent.IO_ERROR, onRemotePluginIOError);
+				this.showError("Load Error", "Unable to load plugin: " + e.target, "Unable to load plugin");
+			}
+
+			private function onRemotePluginLoaded(e:Event):void
+			{
+				this.setStatus("Plugin successfully downloaded");
+				var loader:URLLoader = e.target as URLLoader;
+				loader.removeEventListener(Event.COMPLETE, onRemotePluginLoaded);
+				loader.removeEventListener(IOErrorEvent.IO_ERROR, onRemotePluginIOError);
+				this.parseZipFile(loader.data);
+			}
+			
+			private function parseZipFile(data:ByteArray):void
+			{
+				this.createTmpDir();
+				var zip:FZip = new FZip();
+				zip.addEventListener(FZipEvent.FILE_LOADED, onFileFound);
+				zip.addEventListener(Event.COMPLETE, onZipFileComplete);
+				zip.addEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
+				zip.addEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
+				this.setStatus("Unzipping plugin");
+				zip.loadBytes(data);
+			}
+			
+			private function onZipFileParseError(e:FZipErrorEvent):void
+			{
+				var zip:FZip = e.target as FZip;
+				zip.removeEventListener(FZipEvent.FILE_LOADED, onFileFound);
+				zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
+				zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
+				zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
+				this.showError("Package Parse Error", "Unable to unpackage this plugin: " + e.text, "Parse error", true);
+			}
+			
+			private function onZipFileIOError(e:IOErrorEvent):void
+			{
+				var zip:FZip = e.target as FZip;
+				zip.removeEventListener(FZipEvent.FILE_LOADED, onFileFound);
+				zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
+				zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
+				zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
+				this.showError("Package IO Error", "Unable to unpackage this plugin: " + e.text, "IO error", true);
+			}
+			
+			private function onFileFound(e:FZipEvent):void
+			{
+				try
+				{
+					// Check to see if this plugin is already installed
+					if (e.file.filename.toLocaleLowerCase() == "plugin.xml")
+					{
+						var pluginXML:XML = new XML(e.file.content);
+						var pluginId:String = pluginXML.id;
+						for each (var pluginData:PluginData in this.pluginDP)
+						{
+							if (pluginData.id == pluginId)
+							{
+								this.showError("Duplicate Plugin", "This plugin is already installed. You can't install multiple instances of the same plugin.", "Installation aborted", true);
+								var zip:FZip = e.target as FZip;
+								zip.removeEventListener(FZipEvent.FILE_LOADED, onFileFound);
+								zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
+								zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
+								zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
+								return;
+							}
+						}
+					}
+					var zFile:FZipFile = e.file;
+					var fs:FileStream = new FileStream();
+					this.setStatus("Saving " + zFile.filename);
+					var f:File = this.tmpDir.resolvePath(zFile.filename);
+					fs.open(f, FileMode.WRITE);
+					fs.writeBytes(zFile.content, 0, zFile.content.length);
+					fs.close();
+				}
+				catch(e:Error)
+				{
+					this.showError("Package Error", "Unable to unzip this plugin: " + e.message, "Unzip error", true);
+				}
+			}
+			
+			private function onZipFileComplete(e:Event):void
+			{
+				var zip:FZip = e.target as FZip;
+				zip.removeEventListener(FZipEvent.FILE_LOADED, onFileFound);
+				zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
+				zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
+				zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
+				this.setStatus("Plugin unzipped. Started signature validation.");
+				this.testSignatureValidation();
+			}
+
+			private function onDeletePlugin():void
+			{
+				if (this.pluginSelector.selectedItem == null) return;
+				Alert.show("Are you sure you want to delete the " + this.pluginSelector.selectedItem.name + " plugin?", "Confirm", Alert.NO|Alert.YES, null, onDeletePluginConfirmed);
+			}
+			
+			private function onDeletePluginConfirmed(e:CloseEvent):void
+			{
+				if (e.detail != Alert.YES) return;
+				var pluginData:PluginData = this.pluginSelector.selectedItem as PluginData;
+				var pluginFile:File = this.pluginHome.resolvePath(pluginData.pluginPath);
+				try
+				{
+					pluginFile.deleteDirectory(true);
+				}
+				catch(e:IOError)
+				{
+					this.showError("IO Error", "Unable to delete this plugin: " + e.message);
+				}
+				this.pluginDP.removeItemAt(this.pluginDP.getItemIndex(pluginData));
+				this.loadFirstPlugin();
+			}
+			
+			private function onPluginIOError(e:IOErrorEvent):void
+			{
+				this.showError("Load Error", "Error loading plugin: " + e.text + ". Try deleting this plugin, then reinstalling it.", "Couldn't load plugin");
+			}
+			
+			private function onBrowseForPlugin():void
+			{
+				this.loadPluginDrawer.close();
+				if (this.browseFile == null)
+				{
+					this.browseFile = File.userDirectory;
+					this.browseFile.addEventListener(Event.SELECT, onPluginSelected);
+				}
+				this.browseFile.browseForOpen("Select the plugin you want to install.", [new FileFilter("Plugins", ".zip")]);
+				this.setStatus("Loading plugin");
+			}
+			
+			private function onPluginSelected(e:Event):void
+			{
+				var chosenFile:File = e.target as File;
+				var fileBytes:ByteArray = this.getFileBytes(chosenFile);
+				this.parseZipFile(fileBytes);
+			}
+			
+			private function onRestore():void
+			{
+				if (this.nativeWindow.displayState == NativeWindowDisplayState.MAXIMIZED)
+				{
+					this.nativeWindow.restore();
+					restoreButton.toolTip = "Maximize Application";
+				}
+				else
+				{
+					this.nativeWindow.maximize();
+					restoreButton.toolTip = "Restore Application";
+				}
+			}
+			
+			private function onClosing(e:Event = null):void
+			{
+				if (e) e.preventDefault();
+				this.cleanUpTmpDir();
+				for (var i:int = NativeApplication.nativeApplication.openedWindows.length - 1; i >= 0; --i)
+				{
+					NativeWindow(NativeApplication.nativeApplication.openedWindows[i]).close();
+				}
+			}
+
+			//// Utility functions ////
+			
+			private function getFileBytes(f:File):ByteArray
+			{
+				var fs:FileStream = new FileStream();
+				fs.open(f, FileMode.READ);
+				var bytes:ByteArray = new ByteArray();
+				fs.readBytes(bytes, 0, fs.bytesAvailable);
+				fs.close();
+				return bytes;
+			}
+			
+			private function createTmpDir():void
+			{
+				var tmp:File = File.createTempDirectory();
+				this.tmpDir = tmp.resolvePath(UIDUtil.createUID());
+				this.tmpDir.createDirectory();
+			}
+			
+			private function cleanUpTmpDir():void
+			{
+				if (this.tmpDir != null && this.tmpDir.parent.exists)
+				{
+					this.tmpDir.parent.deleteDirectory(true);
+				}
+				this.tmpDir = null;
+			}
+
+			private function setStatus(msg:String, showProgress:Boolean=false):void
+			{
+				this.statusMessage.text = msg;
+				this.progress.visible = showProgress;
+			}
+			
+			private function showError(title:String, errorMsg:String, statusMsg:String = null, cleanUpTmpDir:Boolean = false):void
+			{
+				Alert.show(errorMsg, title, Alert.OK);
+				if (statusMsg != null) this.setStatus(statusMsg);
+				if (cleanUpTmpDir) this.cleanUpTmpDir();
+			}
+
+		]]>
+	</mx:Script>
+
+	<mx:Style source="assets/stylesheet.css" />
+
+	<mx:VBox width="100%" height="100%" horizontalGap="0" verticalGap="0" styleName="mainContent">
+		<mx:Canvas id="appTitleBar" width="100%" height="32" styleName="titleBar" mouseDown="nativeWindow.startMove();" doubleClickEnabled="true" doubleClick="nativeWindow.minimize();">
+			<mx:Image source="@Embed('/assets/logo.png')" top="2" left="5"/>
+			<mx:Label text="Search" styleName="appTitleFirst" top="6" left="37"/>
+			<mx:Label text="Central" styleName="appTitleSecond" top="5" left="107"/>
+			<mx:Button styleName="appCloseButton" click="this.onClosing(null);" toolTip="Close Application" right="9" top="9"/>
+			<mx:Button id="restoreButton" styleName="appRestoreButton" click="onRestore();" toolTip="Maximize Application" right="23" top="9"/>
+			<mx:Button styleName="appMinimizeButton" click="this.nativeWindow.minimize()" toolTip="Minimize Application" right="36" top="9"/>
+		</mx:Canvas>
+		<mx:HBox width="100%" horizontalAlign="center" paddingLeft="4" paddingTop="4" paddingBottom="4" paddingRight="4">
+			<mx:ComboBox id="pluginSelector" width="175" dataProvider="{pluginDP}" labelField="name" change="this.loadPlugin(pluginSelector.selectedItem as PluginData);"/>
+			<mx:TextInput width="100%" id="searchTerm" styleName="searchInput" enter="onSubmit(event);" focusIn="searchTerm.setSelection(0, searchTerm.length)"/>
+			<mx:Button label="Search" click="onSubmit(event);"/>
+			<mx:VRule height="25"/>
+			<mx:Button label="Add Plugin" click="loadPluginDrawer.open(); urlInput.setFocus();"/>
+			<mx:Button label="Delete Plugin" click="onDeletePlugin();" enabled="{(this.pluginDP.length != 0)}"/>
+		</mx:HBox>
+		<mx:Box width="100%" height="100%" paddingTop="0" paddingRight="2" paddingBottom="2" paddingLeft="2">
+			<mx:SWFLoader id="pluginLoader" width="100%" height="100%" init="this.setStatus('Plugin loaded');searchTerm.setFocus();" ioError="onPluginIOError(event);"/>
+		</mx:Box>
+		<mx:Canvas width="100%" height="20">
+			<mx:Label id="statusMessage" left="4" bottom="0" color="#ffffff"/>
+			<mx:ProgressBar id="progress" indeterminate="true" visible="false" bottom="0" right="4" labelPlacement="right" labelWidth="0"/>
+			<mx:Button id="appGripper" styleName="appGripper" bottom="2" right="2" mouseDown="nativeWindow.startResize(NativeWindowResize.BOTTOM_RIGHT);"/>
+		</mx:Canvas>
+	</mx:VBox>
+	<local:TopDrawer id="loadPluginDrawer" width="375" height="150">
+		<mx:VBox width="100%" height="100%" horizontalAlign="center" verticalAlign="middle" styleName="drawer" verticalGap="15" paddingTop="5" paddingBottom="5">
+			<mx:TextArea width="300" height="50" editable="false" selectable="false" text="Enter the URL to the plugin below, or click 'Browse...' to install it from disk." backgroundColor="0xffffff" backgroundAlpha="0" borderThickness="0"/>
+			<mx:TextInput id="urlInput" width="350" enter="onDownloadPlugin();"/>
+			<mx:HBox width="100%" horizontalAlign="center">
+				<mx:Button label="Cancel" width="90" click="urlInput.text = ''; loadPluginDrawer.close(); searchTerm.setFocus();" color="0xffffff"/>
+				<mx:Button label="Install" width="90" click="onDownloadPlugin();" color="0xffffff" enabled="{(urlInput.text.length != 0)}"/>
+				<mx:Button label="Browse..." width="90" color="#ffffff" click="onBrowseForPlugin();"/>
+			</mx:HBox>
+		</mx:VBox>
+	</local:TopDrawer>
+</mx:WindowedApplication>

@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Window xmlns:mx="http://www.adobe.com/2006/mxml" layout="absolute" width="515" height="260" creationComplete="onCreationComplete();" showStatusBar="false">
+	<mx:Script>
+		<![CDATA[
+			import mx.controls.Alert;
+			import mx.events.CloseEvent;
+			
+			private var _pluginName:String;
+			private var _pluginDescription:String;
+			private var _publisher:String;
+			private var _verified:Boolean;
+			
+			public function setData(pluginName:String, pluginDescription:String, publisher:String, verified:Boolean):void
+			{
+				this._pluginName = pluginName;
+				this._pluginDescription = pluginDescription;
+				this._publisher = publisher;
+				this._verified = verified;
+			}
+			
+			private function onCreationComplete():void
+			{
+				this.pluginNameLabel.text = this.checkForNull(this._pluginName);
+				this.pluginDescriptionText.text = this.checkForNull(this._pluginDescription);
+				this.publisherLabel.text = this.checkForNull(this._publisher);
+				if (this._verified)
+				{
+					this.publisherIdentityLabel.text = "VERIFIED";
+					this.publisherIdentityLabel.setStyle("color", 0x31A500);
+				}
+				else
+				{
+					this.publisherIdentityLabel.text = "NOT VERIFIED";
+					this.publisherIdentityLabel.setStyle("color", 0xff0000);
+				}
+			}
+			
+			private function checkForNull(s:String):String
+			{
+				if (s == null || s.length == 0)
+				{
+					return "UNKNOWN";
+				}
+				return s;
+			}
+			
+			private function onClose(answer:int):void
+			{
+				var closeEvent:CloseEvent = new CloseEvent(CloseEvent.CLOSE);
+				closeEvent.detail = answer;
+				this.dispatchEvent(closeEvent);
+				this.close();
+			}
+		]]>
+	</mx:Script>
+	<mx:VBox width="100%" height="100%" verticalAlign="middle" horizontalAlign="center">
+		<mx:Label text="Are you sure you want to install this plugin?" fontWeight="bold" fontSize="18"/>
+		<mx:Form>
+			<mx:FormItem label="Plugin:">
+				<mx:Label id="pluginNameLabel"/>
+			</mx:FormItem>
+			<mx:FormItem label="Publisher:">
+				<mx:Label id="publisherLabel"/>
+			</mx:FormItem>
+			<mx:FormItem label="Publisher Identity:">
+				<mx:Label id="publisherIdentityLabel" fontWeight="bold"/>
+			</mx:FormItem>
+			<mx:FormItem label="Plugin Description:">
+				<mx:TextArea id="pluginDescriptionText" width="215" height="60" editable="false"/>
+			</mx:FormItem>
+		</mx:Form>
+		<mx:HBox width="100%" horizontalAlign="center" paddingBottom="15">
+			<mx:Button label="Cancel" click="onClose(Alert.CANCEL);"/>
+			<mx:Button label="Install" click="onClose(Alert.YES);"/>
+		</mx:HBox>
+	</mx:VBox>
+</mx:Window>
