@@ -52,6 +52,7 @@
 			private var tmpDir:File; // The directory that plugins are unpacked into
 			private var pluginHome:File; // The directory where plugins live
 			private var browseFile:File; // File for browsing for local plugins
+			private var zipFileParseError:Boolean; // Indicates whether the plugin was successfully unzipped
 			
 			private function onCreationComplete():void
 			{
@@ -348,6 +349,7 @@
 			
 			private function parseZipFile(data:ByteArray):void
 			{
+				this.zipFileParseError = false;
 				this.createTmpDir();
 				var zip:FZip = new FZip();
 				zip.addEventListener(FZipEvent.FILE_LOADED, onFileFound);
@@ -365,7 +367,11 @@
 				zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
 				zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
 				zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
-				this.showError("Package Parse Error", "Unable to unpackage this plugin: " + e.text, "Parse error", true);
+				if (!this.zipFileParseError)
+				{
+					this.showError("Package Parse Error", "Unable to unpackage this plugin: " + e.text, "Parse error", true);
+				}
+				this.zipFileParseError = true;
 			}
 			
 			private function onZipFileIOError(e:IOErrorEvent):void
@@ -375,7 +381,11 @@
 				zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
 				zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
 				zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
-				this.showError("Package IO Error", "Unable to unpackage this plugin: " + e.text, "IO error", true);
+				if (!this.zipFileParseError)
+				{
+					this.showError("Package IO Error", "Unable to unpackage this plugin: " + e.text, "IO error", true);
+				}
+				this.zipFileParseError = true;
 			}
 			
 			private function onFileFound(e:FZipEvent):void
@@ -402,16 +412,27 @@
 						}
 					}
 					var zFile:FZipFile = e.file;
-					var fs:FileStream = new FileStream();
 					this.setStatus("Saving " + zFile.filename);
 					var f:File = this.tmpDir.resolvePath(zFile.filename);
-					fs.open(f, FileMode.WRITE);
-					fs.writeBytes(zFile.content, 0, zFile.content.length);
-					fs.close();
+					if (zFile.content.length == 0)
+					{
+						f.createDirectory();
+					}
+					else
+					{
+						var fs:FileStream = new FileStream();
+						fs.open(f, FileMode.WRITE);
+						fs.writeBytes(zFile.content, 0, zFile.content.length);
+						fs.close();
+					}
 				}
 				catch(e:Error)
 				{
-					this.showError("Package Error", "Unable to unzip this plugin: " + e.message, "Unzip error", true);
+					if (!this.zipFileParseError)
+					{
+						this.showError("Corrupt Plugin", "Unable to unzip this plugin: " + e.message, "Unzip error", true);
+					}
+					this.zipFileParseError = true;
 				}
 			}
 			
@@ -422,8 +443,11 @@
 				zip.removeEventListener(Event.COMPLETE, onZipFileComplete);
 				zip.removeEventListener(FZipErrorEvent.PARSE_ERROR, onZipFileParseError);
 				zip.removeEventListener(IOErrorEvent.IO_ERROR, onZipFileIOError);
-				this.setStatus("Plugin unzipped. Started signature validation.");
-				this.testSignatureValidation();
+				if (!this.zipFileParseError)
+				{
+					this.setStatus("Plugin unzipped. Started signature validation.");
+					this.testSignatureValidation();
+				}
 			}
 
 			private function onDeletePlugin():void
@@ -546,8 +570,8 @@
 	<mx:VBox width="100%" height="100%" horizontalGap="0" verticalGap="0" styleName="mainContent">
 		<mx:Canvas id="appTitleBar" width="100%" height="32" styleName="titleBar" mouseDown="nativeWindow.startMove();" doubleClickEnabled="true" doubleClick="nativeWindow.minimize();">
 			<mx:Image source="@Embed('/assets/logo.png')" top="2" left="5"/>
-			<mx:Label text="Search" styleName="appTitleFirst" top="6" left="37"/>
-			<mx:Label text="Central" styleName="appTitleSecond" top="5" left="107"/>
+			<mx:Label text="Pluggable" styleName="appTitleFirst" top="5" left="37"/>
+			<mx:Label text="SearchCentral" styleName="appTitleSecond" top="5" left="135"/>
 			<mx:Button styleName="appCloseButton" click="this.onClosing(null);" toolTip="Close Application" right="9" top="9"/>
 			<mx:Button id="restoreButton" styleName="appRestoreButton" click="onRestore();" toolTip="Maximize Application" right="23" top="9"/>
 			<mx:Button styleName="appMinimizeButton" click="this.nativeWindow.minimize()" toolTip="Minimize Application" right="36" top="9"/>
