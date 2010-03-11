@@ -1,4 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
+
+<!--
+	Adobe Systems Incorporated(r) Source Code License Agreement
+	Copyright(c) 2010 Adobe Systems Incorporated. All rights reserved.
+	
+	Please read this Source Code License Agreement carefully before using
+	the source code.
+	
+	Adobe Systems Incorporated grants to you a perpetual, worldwide, non-exclusive, 
+	no-charge, royalty-free, irrevocable copyright license, to reproduce,
+	prepare derivative works of, publicly display, publicly perform, and
+	distribute this source code and such derivative works in source or 
+	object code form without any attribution requirements.  
+	
+	The name "Adobe Systems Incorporated" must not be used to endorse or promote products
+	derived from the source code without prior written permission.
+	
+	You agree to indemnify, hold harmless and defend Adobe Systems Incorporated from and
+	against any loss, damage, claims or lawsuits, including attorney's 
+	fees that arise or result from your use or distribution of the source 
+	code.
+	
+	THIS SOURCE CODE IS PROVIDED "AS IS" AND "WITH ALL FAULTS", WITHOUT 
+	ANY TECHNICAL SUPPORT OR ANY EXPRESSED OR IMPLIED WARRANTIES, INCLUDING,
+	BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+	FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  ALSO, THERE IS NO WARRANTY OF 
+	NON-INFRINGEMENT, TITLE OR QUIET ENJOYMENT.  IN NO EVENT SHALL ADOBE 
+	OR ITS SUPPLIERS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, 
+	EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, 
+	PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+	OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, 
+	WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR 
+	OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOURCE CODE, EVEN IF
+	ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-->
+
 <mx:WindowedApplication xmlns:mx="http://www.adobe.com/2006/mxml"
 						xmlns:local="*"
 						layout="absolute" 
@@ -38,30 +74,37 @@
 			import mx.managers.SystemManager;
 			import mx.utils.UIDUtil;
 			
-			// The supported hash algorithms
+			// The supported hash algorithms.
 			private const SHA256_ALGORITHM:String = "http://www.w3.org/2001/04/xmlenc#sha256";
 			private const SHA1_ALGORITHM:String   = "http://www.w3.org/2000/09/xmldsig#sha1";
 
-			// Certificate status constants
+			// Certificate status constants.
 			private const STATUS_VALID:String   = "valid";
 			private const STATUS_INVALID:String = "invalid";
 
-			// Some key files
+			// Some key files.
 			private const SIGNATURE_FILE:String = "META-INF/signatures.xml";
 			private const HASH_FILE:String = "META-INF/AIR/hash";
 			
-			// Some namespaces we need for parsing and validating XML
-			private const sigNS:Namespace = new Namespace("http://www.w3.org/2000/09/xmldsig#");
+			// Some namespaces we need for parsing and validating XML.
 			private const airNS:Namespace = new Namespace("http://ns.adobe.com/air/application/1.5");
+			private const XMLDSIG:Namespace = new Namespace("http://www.w3.org/2000/09/xmldsig#");
+			private const XADES:Namespace = new Namespace("http://uri.etsi.org/01903/v1.1.1#");
+
 			
-			// A data provider to hold plug data
+			// Used for validating signature XML files.
+			private var xmldsigElements:Object = {CanonicalizationMethod:true, DigestMethod:true, DigestValue:true, KeyInfo:true, Manifest:true, Object:true, Reference:true, Signature:true, SignedInfo:true, SignatureMethod:true, SignatureValue:true, Transform:true, Transforms:true, X509Certificate:true, X509CRL:true, X509Data:true};
+			private var xadesElements:Object = {EncapsulatedTimeStamp:true, HashDataInfo:true, QualifyingProperties:true, SignatureTimeStamp:true, UnsignedProperties:true, UnsignedSignatureProperties: true};
+
+			// A data provider to hold plug data.
 			[Bindable] private var pluginDP:ArrayCollection;
 			
-			private var tmpDir:File; // The directory that plugins are unpacked into
-			private var pluginHome:File; // The directory where plugins live
-			private var browseFile:File; // File for browsing for local plugins
-			private var zipFileParseError:Boolean; // Indicates whether the plugin was successfully unzipped
-			private var sigXML:XML; // The signature XML object
+			
+			private var tmpDir:File; // The directory that plugins are unpacked into.
+			private var pluginHome:File; // The directory where plugins live.
+			private var browseFile:File; // File for browsing for local plugins.
+			private var zipFileParseError:Boolean; // Indicates whether the plugin was successfully unzipped.
+			private var sigXML:XML; // The signature XML object.
 			
 			private function onCreationComplete():void
 			{
@@ -182,9 +225,34 @@
 					var xmlBytes:ByteArray = this.getFileBytes(sigFile);
 					this.sigXML = new XML(xmlBytes);
 
+					this.setStatus("Checking signature format");
+
+					// First, make sure that the signature's XML is valid.
+					for each( var element:XML in this.sigXML.descendants()) {
+						if( element.nodeKind() != "element" ) continue;
+						
+						switch( element.namespace().uri ) {
+							case XMLDSIG.uri:
+								if( !xmldsigElements[element.localName()] ) {
+									this.showError("Corrupt Plugin", "This plugin's signature file is malformed.", "Plugin corrupt", true);
+									return;
+								}
+								break;
+							case XADES.uri:
+								if( !xadesElements[element.localName()] ) {
+									this.showError("Corrupt Plugin", "This plugin's signature file is malformed.", "Plugin corrupt", true);
+									return;
+								}
+								break;
+							default:
+								this.showError("Corrupt Plugin", "This plugin's signature file is malformed.", "Plugin corrupt", true);
+								return;
+						}
+					}
+
 					this.setStatus("Beginning signature validation");
 	
-					// First, validate the signature
+					// Next, validate the signature
 					var xmlSigVal:XMLSignatureValidator = new XMLSignatureValidator();
 					var def:URIDereferencer = new URIDereferencer(this.sigXML);
 					xmlSigVal.uriDereferencer = def;
@@ -196,7 +264,7 @@
 					xmlSigVal.addEventListener(Event.COMPLETE, onValidationComplete);
 					xmlSigVal.addEventListener(ErrorEvent.ERROR, onValidationError);
 	
-					xmlSigVal.verify(this.sigXML.sigNS::Signature[0]);
+					xmlSigVal.verify(this.sigXML.XMLDSIG::Signature[0]);
 				}
 				catch (e:Error)
 				{
@@ -221,8 +289,8 @@
 				try
 				{
 					// Now, make sure the files in the plugin weren't tampered with by verifying their digests.
-					var packageContents:XMLList = this.sigXML..sigNS::Manifest.(@Id=="PackageContents");
-					for each (var reference:XML in packageContents.sigNS::Reference)
+					var packageContents:XMLList = this.sigXML..XMLDSIG::Manifest.(@Id=="PackageContents");
+					for each (var reference:XML in packageContents.XMLDSIG::Reference)
 					{
 						var resourceFile:File = this.tmpDir.resolvePath(reference.@URI);
 						if (!resourceFile.exists)
@@ -232,8 +300,8 @@
 						}
 						this.setStatus("Verifying " + resourceFile.name);
 						var resourceBytes:ByteArray = this.getFileBytes(resourceFile);
-						var algorithm:String = reference.sigNS::DigestMethod.@Algorithm;
-						var claimedDigest:String = reference.sigNS::DigestValue;
+						var algorithm:String = reference.XMLDSIG::DigestMethod.@Algorithm;
+						var claimedDigest:String = reference.XMLDSIG::DigestValue;
 						var hashedBytes:ByteArray;
 						var hasher:IHash;
 						
@@ -275,7 +343,7 @@
 						if (relPath != SIGNATURE_FILE && relPath != HASH_FILE) ++fileCount;
 					}
  
-					if (fileCount != packageContents.sigNS::Reference.length())
+					if (fileCount != packageContents.XMLDSIG::Reference.length())
 					{
 						this.showError("Validation Error", "This plugin contains files not listed in the manifest. Aborting installation.", "Plugin corrupt", true);
 						return;
