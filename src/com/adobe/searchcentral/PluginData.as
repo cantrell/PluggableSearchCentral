@@ -1,5 +1,5 @@
-//  Adobe Systems Incorporated(r) Source Code License Agreement
-//  Copyright(c) 2010 Adobe Systems Incorporated. All rights reserved.
+//  Adobe(R) Systems Incorporated Source Code License Agreement
+//  Copyright(c) 2006-2010 Adobe Systems Incorporated. All rights reserved.
 //	
 //  Please read this Source Code License Agreement carefully before using
 //  the source code.

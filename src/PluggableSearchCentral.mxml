@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <!--
-	Adobe Systems Incorporated(r) Source Code License Agreement
-	Copyright(c) 2010 Adobe Systems Incorporated. All rights reserved.
+	Adobe(R) Systems Incorporated Source Code License Agreement
+	Copyright(c) 2006-2010 Adobe Systems Incorporated. All rights reserved.
 	
 	Please read this Source Code License Agreement carefully before using
 	the source code.
@@ -44,11 +44,7 @@
 	<mx:Script>
 		<![CDATA[
 			import com.adobe.searchcentral.PluginData;
-			import com.adobe.searchcentral.URIDereferencer;
-			import com.hurlant.crypto.hash.IHash;
-			import com.hurlant.crypto.hash.SHA1;
-			import com.hurlant.crypto.hash.SHA256;
-			import com.hurlant.util.Base64;
+			import com.adobe.ucf.UCFSignatureValidator;
 			
 			import deng.fzip.FZip;
 			import deng.fzip.FZipErrorEvent;
@@ -62,9 +58,6 @@
 			import flash.net.URLLoader;
 			import flash.net.URLLoaderDataFormat;
 			import flash.net.URLRequest;
-			import flash.security.ReferencesValidationSetting;
-			import flash.security.RevocationCheckSettings;
-			import flash.security.XMLSignatureValidator;
 			import flash.system.LoaderContext;
 			import flash.utils.ByteArray;
 			
@@ -74,37 +67,16 @@
 			import mx.managers.SystemManager;
 			import mx.utils.UIDUtil;
 			
-			// The supported hash algorithms.
-			private const SHA256_ALGORITHM:String = "http://www.w3.org/2001/04/xmlenc#sha256";
-			private const SHA1_ALGORITHM:String   = "http://www.w3.org/2000/09/xmldsig#sha1";
-
-			// Certificate status constants.
-			private const STATUS_VALID:String   = "valid";
-			private const STATUS_INVALID:String = "invalid";
-
-			// Some key files.
-			private const SIGNATURE_FILE:String = "META-INF/signatures.xml";
-			private const HASH_FILE:String = "META-INF/AIR/hash";
-			
 			// Some namespaces we need for parsing and validating XML.
-			private const airNS:Namespace = new Namespace("http://ns.adobe.com/air/application/1.5");
-			private const XMLDSIG:Namespace = new Namespace("http://www.w3.org/2000/09/xmldsig#");
-			private const XADES:Namespace = new Namespace("http://uri.etsi.org/01903/v1.1.1#");
-
-			
-			// Used for validating signature XML files.
-			private var xmldsigElements:Object = {CanonicalizationMethod:true, DigestMethod:true, DigestValue:true, KeyInfo:true, Manifest:true, Object:true, Reference:true, Signature:true, SignedInfo:true, SignatureMethod:true, SignatureValue:true, Transform:true, Transforms:true, X509Certificate:true, X509CRL:true, X509Data:true};
-			private var xadesElements:Object = {EncapsulatedTimeStamp:true, HashDataInfo:true, QualifyingProperties:true, SignatureTimeStamp:true, UnsignedProperties:true, UnsignedSignatureProperties: true};
+			private const AIR_NS:Namespace = new Namespace("http://ns.adobe.com/air/application/1.5");
 
 			// A data provider to hold plug data.
 			[Bindable] private var pluginDP:ArrayCollection;
-			
 			
 			private var tmpDir:File; // The directory that plugins are unpacked into.
 			private var pluginHome:File; // The directory where plugins live.
 			private var browseFile:File; // File for browsing for local plugins.
 			private var zipFileParseError:Boolean; // Indicates whether the plugin was successfully unzipped.
-			private var sigXML:XML; // The signature XML object.
 			
 			private function onCreationComplete():void
 			{
@@ -159,10 +131,10 @@
 					
 					var pluginData:PluginData = new PluginData();
 					
-					var name:String = pluginXML.airNS::name;
-					var id:String = pluginXML.airNS::id;
-					var description:String = pluginXML.airNS::description;
-					var version:String = pluginXML.airNS::version;
+					var name:String = pluginXML.AIR_NS::name;
+					var id:String = pluginXML.AIR_NS::id;
+					var description:String = pluginXML.AIR_NS::description;
+					var version:String = pluginXML.AIR_NS::version;
 					
 					if (name.length == 0 || id.length == 0 || description.length == 0 || version.length == 0) return null;
 					
@@ -172,7 +144,7 @@
 					pluginData.description = description;
 					pluginData.version = Number(version);
 					
-					var pluginFile:File = pluginDir.resolvePath(pluginXML.airNS::initialWindow.airNS::content);
+					var pluginFile:File = pluginDir.resolvePath(pluginXML.AIR_NS::initialWindow.AIR_NS::content);
 					if (!pluginFile.exists) return null;
 					pluginData.contentPath = pluginFile.nativePath;
 				}
@@ -212,162 +184,40 @@
 			
 			private function startValidation():void
 			{
-				// Get the signature file and start the validation process
-				var sigFile:File = this.tmpDir.resolvePath(SIGNATURE_FILE);
-				if (!sigFile.exists)
-				{
-					this.showError("Corrupt Plugin", "This plugin is missing the signatures.xml file, so it can't be installed.", "Plugin corrupt", true);
-					return;
-				}
-				
+				this.setStatus("Beginning signature validation");
+
+				var validator:UCFSignatureValidator = new UCFSignatureValidator();
+				validator.useSystemTrustStore = true;
+				validator.packageRoot = this.tmpDir;
+				validator.addEventListener(ErrorEvent.ERROR, onValidationError);
+				validator.addEventListener(Event.COMPLETE, onValidationComplete);
 				try
 				{
-					var xmlBytes:ByteArray = this.getFileBytes(sigFile);
-					this.sigXML = new XML(xmlBytes);
-
-					this.setStatus("Checking signature format");
-
-					// First, make sure that the signature's XML is valid.
-					for each( var element:XML in this.sigXML.descendants()) {
-						if( element.nodeKind() != "element" ) continue;
-						
-						switch( element.namespace().uri ) {
-							case XMLDSIG.uri:
-								if( !xmldsigElements[element.localName()] ) {
-									this.showError("Corrupt Plugin", "This plugin's signature file is malformed.", "Plugin corrupt", true);
-									return;
-								}
-								break;
-							case XADES.uri:
-								if( !xadesElements[element.localName()] ) {
-									this.showError("Corrupt Plugin", "This plugin's signature file is malformed.", "Plugin corrupt", true);
-									return;
-								}
-								break;
-							default:
-								this.showError("Corrupt Plugin", "This plugin's signature file is malformed.", "Plugin corrupt", true);
-								return;
-						}
-					}
-
-					this.setStatus("Beginning signature validation");
-	
-					// Next, validate the signature
-					var xmlSigVal:XMLSignatureValidator = new XMLSignatureValidator();
-					var def:URIDereferencer = new URIDereferencer(this.sigXML);
-					xmlSigVal.uriDereferencer = def;
-					
-					xmlSigVal.referencesValidationSetting = ReferencesValidationSetting.VALID_OR_UNKNOWN_IDENTITY; 
-					xmlSigVal.revocationCheckSetting = RevocationCheckSettings.BEST_EFFORT;
-					xmlSigVal.useSystemTrustStore = true;
-					
-					xmlSigVal.addEventListener(Event.COMPLETE, onValidationComplete);
-					xmlSigVal.addEventListener(ErrorEvent.ERROR, onValidationError);
-	
-					xmlSigVal.verify(this.sigXML.XMLDSIG::Signature[0]);
+					validator.verify();
 				}
 				catch (e:Error)
 				{
-					this.showError("Verification Error", "Unable to verify plugin signature: " + e.message, "Plugin corrupt", true);
+					validator.removeEventListener(ErrorEvent.ERROR, onValidationError);
+					validator.removeEventListener(Event.COMPLETE, onValidationComplete);
+					this.showError("Validation Error", e.message, "Plugin invalid", true);
 				}
 			}
 						
 			private function onValidationComplete(e:Event):void
 			{
-				var xmlSigVal:XMLSignatureValidator = e.target as XMLSignatureValidator;
-				xmlSigVal.removeEventListener(Event.COMPLETE, onValidationComplete);
-				xmlSigVal.removeEventListener(ErrorEvent.ERROR, onValidationError);
+				var validator:UCFSignatureValidator = e.target as UCFSignatureValidator;
+				validator.removeEventListener(ErrorEvent.ERROR, onValidationError);
+				validator.removeEventListener(Event.COMPLETE, onValidationComplete);
+
 				this.setStatus("Signature validation complete");
 
-				// If the signature is invalid, abort.
-				if (xmlSigVal.validityStatus == STATUS_INVALID)
-				{
-					this.showError("Validation Error", "This signature is invalid. Aborting installation.", "Plugin invalid", true);
-					return;
-				}				
-				
-				try
-				{
-					// Now, make sure the files in the plugin weren't tampered with by verifying their digests.
-					var packageContents:XMLList = this.sigXML..XMLDSIG::Manifest.(@Id=="PackageContents");
-					for each (var reference:XML in packageContents.XMLDSIG::Reference)
-					{
-						var resourceFile:File = this.tmpDir.resolvePath(reference.@URI);
-						if (!resourceFile.exists)
-						{
-							this.showError("Validation Error", "One or more files are missing from this plugin.", "Plugin invalid", true);
-							return;
-						}
-						this.setStatus("Verifying " + resourceFile.name);
-						var resourceBytes:ByteArray = this.getFileBytes(resourceFile);
-						var algorithm:String = reference.XMLDSIG::DigestMethod.@Algorithm;
-						var claimedDigest:String = reference.XMLDSIG::DigestValue;
-						var hashedBytes:ByteArray;
-						var hasher:IHash;
-						
-						// Only supports SHA1 and SHA256 for now
-						switch (algorithm)
-						{
-							case SHA256_ALGORITHM:
-								hasher = new SHA256();
-								break;
-							case SHA1_ALGORITHM:
-								hasher = new SHA1();
-								break;
-						}
-						
-						hashedBytes = hasher.hash(resourceBytes);
-						var actualDigest:String = Base64.encodeByteArray(hashedBytes);
-						
-						// This is what we're looking for. If the digests don't match, the file was tampered with.
-						if (actualDigest != claimedDigest)
-						{
-							this.showError("Digest Comparison Failure", "This plugin appears to have been tampered with and cannot be installed.", "Plugin could not be saved", true);
-							return;
-						}
-					}
-
-					// We know that the signature isn't invalid, and that none of the files in the manifest have been tampered with,
-					// but now we need to make sure no additional files were slipped in. We do this by comparing the files in the
-					// signature.xml file with the files actually contained in the expanded plugin directory.
-					var files:Array = this.tmpDir.getDirectoryListing();
-					var fileCount:uint = 0;
-					for each (var f:File in files)
-					{
-						if (f.isDirectory)
-						{
-							files.push.apply(files, f.getDirectoryListing());
-							continue;
-						}
-						var relPath:String = this.tmpDir.getRelativePath(f);
-						if (relPath != SIGNATURE_FILE && relPath != HASH_FILE) ++fileCount;
-					}
- 
-					if (fileCount != packageContents.XMLDSIG::Reference.length())
-					{
-						this.showError("Validation Error", "This plugin contains files not listed in the manifest. Aborting installation.", "Plugin corrupt", true);
-						return;
-					}
-					
-					// Now that we know the signature is not invalid, and that the checksums of all the files match,
-					// ask the user if s/he wants to install the plugin...
-					var pluginXMLFile:File = this.tmpDir.resolvePath("plugin.xml");
-					if (!pluginXMLFile.exists)
-					{
-						this.showError("Corrupt Plugin", "The plugin.xml file is missing from this plugin.", "Corrupt plugin", true);
-						return;
-					}
-					var pluginXMLBytes:ByteArray = this.getFileBytes(pluginXMLFile);
-					var pluginXML:XML = new XML(pluginXMLBytes);
-					var confirm:InstallationConfirmation = new InstallationConfirmation();
-					confirm.addEventListener(CloseEvent.CLOSE, onConfirmationClose);
-					confirm.setData(pluginXML.airNS::name, pluginXML.airNS::description, xmlSigVal.signerCN, (xmlSigVal.validityStatus == STATUS_VALID));
-					confirm.open();
-				}
-				catch (e:Error)
-				{
-					this.showError("Validation Error", "Unable to validate this plugin: " + e.message, "Plugin corrupt", true);
-				}
+				var pluginXMLFile:File = this.tmpDir.resolvePath("plugin.xml");
+				var pluginXMLBytes:ByteArray = this.getFileBytes(pluginXMLFile);
+				var pluginXML:XML = new XML(pluginXMLBytes);
+				var confirm:InstallationConfirmation = new InstallationConfirmation();
+				confirm.addEventListener(CloseEvent.CLOSE, onConfirmationClose);
+				confirm.setData(pluginXML.AIR_NS::name, pluginXML.AIR_NS::description, validator.xmlSignatureValidator.signerCN, (validator.xmlSignatureValidator.validityStatus == "valid"));
+				confirm.open();
 			}
 			
 			private function onConfirmationClose(e:Event):void
@@ -405,9 +255,9 @@
 			
 			private function onValidationError(e:ErrorEvent):void
 			{
-				var xmlSigVal:XMLSignatureValidator = e.target as XMLSignatureValidator;
-				xmlSigVal.removeEventListener(Event.COMPLETE, onValidationComplete);
-				xmlSigVal.removeEventListener(ErrorEvent.ERROR, onValidationError);
+				var validator:UCFSignatureValidator = e.target as UCFSignatureValidator;
+				validator.removeEventListener(ErrorEvent.ERROR, onValidationError);
+				validator.removeEventListener(Event.COMPLETE, onValidationComplete);
 				this.showError("Signature Validation Failed", "This plugin's signature could not be validated: " + e.text, "Signature validation failed", true);
 			}
 						
@@ -510,7 +360,7 @@
 					if (e.file.filename.toLocaleLowerCase() == "plugin.xml")
 					{
 						var pluginXML:XML = new XML(e.file.content);
-						var pluginId:String = pluginXML.id;
+						var pluginId:String = pluginXML.AIR_NS::id;
 						for each (var pluginData:PluginData in this.pluginDP)
 						{
 							if (pluginData.id == pluginId)
@@ -661,7 +511,6 @@
 					this.tmpDir.parent.deleteDirectory(true);
 				}
 				this.tmpDir = null;
-				this.sigXML = null;
 			}
 
 			private function setStatus(msg:String, showProgress:Boolean=false):void
