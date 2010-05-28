@@ -159,7 +159,10 @@
 			{
 				if (this.pluginDP.length == 0)
 				{
-					if (this.pluginLoader.content != null) this.pluginLoader.unloadAndStop();
+					if (this.pluginLoader.content != null)
+					{
+						this.pluginLoader.unloadAndStop();	
+					}
 					this.setStatus("No plugins found. Click \"Add Plugin\" to get started.");
 					return;
 				}
@@ -171,7 +174,24 @@
 			private function loadPlugin(pluginData:PluginData):void
 			{
 				this.setStatus("Loading " + pluginData.name);
-				if (this.pluginLoader.content != null) this.pluginLoader.unloadAndStop();
+				if (this.pluginLoader.content != null)
+				{
+					var listener:Function = function(e:Event):void
+					{
+						pluginLoader.removeEventListener(Event.UNLOAD, listener);
+						onPluginUnloaded(pluginData);
+					};
+					this.pluginLoader.addEventListener(Event.UNLOAD, listener);
+					this.pluginLoader.unloadAndStop();
+				}
+				else
+				{
+					this.onPluginUnloaded(pluginData);
+				}
+			}
+			
+			private function onPluginUnloaded(pluginData:PluginData):void
+			{
 				var contentFile:File = new File(pluginData.contentPath);
 				if (!contentFile.exists)
 				{
