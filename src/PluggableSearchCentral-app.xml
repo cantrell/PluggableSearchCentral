@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="no"?>
 <application xmlns="http://ns.adobe.com/air/application/1.5">
 
-	<id>com.christiancantrell.pluggablesearchcentral</id>
+	<id>PluggableSearchCentral</id>
 	<filename>PluggableSearchCentral</filename>
 	<name>PluggableSearchCentral</name>
 	<version>1</version>
